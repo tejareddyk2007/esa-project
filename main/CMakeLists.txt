@@ -33,6 +33,7 @@ set(SOURCES "audio/audio_codec.cc"
             "protocols/text_glyph_payload.cc"
             "protocols/mqtt_protocol.cc"
             "protocols/websocket_protocol.cc"
+            "sos_controller.cc"
             "mcp_server.cc"
             "system_info.cc"
             "application.cc"
@@ -1082,6 +1083,7 @@ idf_component_register(SRCS ${SOURCES}
                         app_update
                         spi_flash
                         mbedtls
+                        esp_http_client
                         console
                         efuse
                         bt

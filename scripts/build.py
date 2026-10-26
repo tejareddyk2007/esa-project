@@ -59,7 +59,7 @@ def _run_idf(*args: str, preview: bool = False) -> None:
     if preview:
         command.append("--preview")
     command.extend(args)
-    if subprocess.run(command, check=False).returncode != 0:
+    if subprocess.run(command, check=False, shell=(sys.platform == "win32")).returncode != 0:
         print(f"{' '.join(command)} failed", file=sys.stderr)
         sys.exit(1)
 
@@ -731,6 +731,7 @@ def _detect_idf_version() -> tuple[int, int, int]:
             check=True,
             capture_output=True,
             text=True,
+            shell=(sys.platform == "win32"),
         ).stdout
         return _parse_version(output)
     except (FileNotFoundError, subprocess.CalledProcessError, ValueError) as error:

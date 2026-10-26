@@ -51,7 +51,7 @@ NoAudioCodecDuplex::NoAudioCodecDuplex(int input_sample_rate, int output_sample_
             .ws_pol = false,
             .bit_shift = true,
             #ifdef   I2S_HW_VERSION_2
-                .left_align = true,
+                .left_align = false,
                 .big_endian = false,
                 .bit_order_lsb = false
             #endif
@@ -112,7 +112,7 @@ NoAudioCodecSimplex::NoAudioCodecSimplex(int input_sample_rate, int output_sampl
             .ws_pol = false,
             .bit_shift = true,
             #ifdef   I2S_HW_VERSION_2
-                .left_align = true,
+                .left_align = false,
                 .big_endian = false,
                 .bit_order_lsb = false
             #endif
@@ -137,12 +137,16 @@ NoAudioCodecSimplex::NoAudioCodecSimplex(int input_sample_rate, int output_sampl
     chan_cfg.id = XIAOZHI_I2S_PORT(1);
     ESP_ERROR_CHECK(i2s_new_channel(&chan_cfg, nullptr, &rx_handle_));
     std_cfg.clk_cfg.sample_rate_hz = (uint32_t)input_sample_rate_;
+    std_cfg.slot_cfg.slot_mask = I2S_STD_SLOT_LEFT; // INMP441 L/R=GND transmits on Left channel
     std_cfg.gpio_cfg.bclk = mic_sck;
     std_cfg.gpio_cfg.ws = mic_ws;
     std_cfg.gpio_cfg.dout = I2S_GPIO_UNUSED;
     std_cfg.gpio_cfg.din = mic_din;
     ESP_ERROR_CHECK(i2s_channel_init_std_mode(rx_handle_, &std_cfg));
-    ESP_LOGI(TAG, "Simplex channels created");
+    // Keep RX channel actively running at boot so CRO immediately sees SCK/WS clocks & SD data
+    ESP_ERROR_CHECK(i2s_channel_enable(rx_handle_));
+    AudioCodec::EnableInput(true);
+    ESP_LOGI(TAG, "Simplex channels created and mic clock active");
 }
 
 NoAudioCodecSimplex::NoAudioCodecSimplex(int input_sample_rate, int output_sample_rate, gpio_num_t spk_bclk, gpio_num_t spk_ws, gpio_num_t spk_dout, i2s_std_slot_mask_t spk_slot_mask, gpio_num_t mic_sck, gpio_num_t mic_ws, gpio_num_t mic_din, i2s_std_slot_mask_t mic_slot_mask){
@@ -181,7 +185,7 @@ NoAudioCodecSimplex::NoAudioCodecSimplex(int input_sample_rate, int output_sampl
             .ws_pol = false,
             .bit_shift = true,
             #ifdef   I2S_HW_VERSION_2
-                .left_align = true,
+                .left_align = false,
                 .big_endian = false,
                 .bit_order_lsb = false
             #endif
@@ -203,16 +207,40 @@ NoAudioCodecSimplex::NoAudioCodecSimplex(int input_sample_rate, int output_sampl
     ESP_ERROR_CHECK(i2s_channel_init_std_mode(tx_handle_, &std_cfg));
 
     // Create a new channel for MIC
+    // Create a new channel for MIC
     chan_cfg.id = XIAOZHI_I2S_PORT(1);
     ESP_ERROR_CHECK(i2s_new_channel(&chan_cfg, nullptr, &rx_handle_));
-    std_cfg.clk_cfg.sample_rate_hz = (uint32_t)input_sample_rate_;
-    std_cfg.slot_cfg.slot_mask = mic_slot_mask;
-    std_cfg.gpio_cfg.bclk = mic_sck;
-    std_cfg.gpio_cfg.ws = mic_ws;
-    std_cfg.gpio_cfg.dout = I2S_GPIO_UNUSED;
-    std_cfg.gpio_cfg.din = mic_din;
-    ESP_ERROR_CHECK(i2s_channel_init_std_mode(rx_handle_, &std_cfg));
-    ESP_LOGI(TAG, "Simplex channels created");
+
+    // Enable internal pulldown so floating pin reads 0 instead of -1
+    gpio_set_pull_mode(mic_din, GPIO_PULLDOWN_ONLY);
+
+    i2s_std_config_t mic_std_cfg = {
+        .clk_cfg = {
+            .sample_rate_hz = (uint32_t)input_sample_rate_,
+            .clk_src = I2S_CLK_SRC_DEFAULT,
+            .mclk_multiple = I2S_MCLK_MULTIPLE_256,
+            #ifdef I2S_HW_VERSION_2
+                .ext_clk_freq_hz = 0,
+            #endif
+        },
+        .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_32BIT, I2S_SLOT_MODE_STEREO),
+        .gpio_cfg = {
+            .mclk = I2S_GPIO_UNUSED,
+            .bclk = mic_sck,
+            .ws = mic_ws,
+            .dout = I2S_GPIO_UNUSED,
+            .din = mic_din,
+            .invert_flags = {
+                .mclk_inv = false,
+                .bclk_inv = false,
+                .ws_inv = false
+            }
+        }
+    };
+    ESP_ERROR_CHECK(i2s_channel_init_std_mode(rx_handle_, &mic_std_cfg));
+    ESP_ERROR_CHECK(i2s_channel_enable(rx_handle_));
+    AudioCodec::EnableInput(true);
+    ESP_LOGI(TAG, "Simplex channels created: MIC on stereo 64-bit clocks (SCK=%d, WS=%d, DIN=%d)", mic_sck, mic_ws, mic_din);
 }
 
 int NoAudioCodec::Write(const int16_t* data, int samples) {
@@ -239,20 +267,64 @@ int NoAudioCodec::Write(const int16_t* data, int samples) {
 }
 
 int NoAudioCodec::Read(int16_t* dest, int samples) {
-    size_t bytes_read;
+    size_t bytes_read = 0;
     constexpr uint32_t kReadTimeoutMs = 200;
 
-    std::vector<int32_t> bit32_buffer(samples);
-    if (i2s_channel_read(rx_handle_, bit32_buffer.data(), samples * sizeof(int32_t), &bytes_read, kReadTimeoutMs) != ESP_OK) {
+    // Read stereo interleaved (Left and Right slots)
+    std::vector<int32_t> bit32_buffer(samples * 2);
+    esp_err_t err = i2s_channel_read(rx_handle_, bit32_buffer.data(), bit32_buffer.size() * sizeof(int32_t), &bytes_read, kReadTimeoutMs);
+    if (err != ESP_OK) {
+        static int err_cnt = 0;
+        if (++err_cnt % 50 == 0) {
+            ESP_LOGE(TAG, "i2s_channel_read error: %s", esp_err_to_name(err));
+        }
         return 0;
     }
 
-    samples = bytes_read / sizeof(int32_t);
-    for (int i = 0; i < samples; i++) {
-        int32_t value = bit32_buffer[i] >> 12;
-        dest[i] = (value > INT16_MAX) ? INT16_MAX : (value < -INT16_MAX) ? -INT16_MAX : (int16_t)value;
+    int pairs_read = bytes_read / (2 * sizeof(int32_t));
+    if (pairs_read == 0) {
+        return 0;
     }
-    return samples;
+
+    int32_t left_min = INT32_MAX, left_max = INT32_MIN;
+    int32_t right_min = INT32_MAX, right_max = INT32_MIN;
+    int left_active_count = 0, right_active_count = 0;
+
+    for (int i = 0; i < pairs_read; i++) {
+        int32_t l = bit32_buffer[2 * i];
+        int32_t r = bit32_buffer[2 * i + 1];
+        if (l < left_min) left_min = l;
+        if (l > left_max) left_max = l;
+        if (r < right_min) right_min = r;
+        if (r > right_max) right_max = r;
+        if (l != -1 && l != 0) left_active_count++;
+        if (r != -1 && r != 0) right_active_count++;
+    }
+
+    // Auto-detect whether mic is transmitting on Left (L/R=GND) or Right (L/R=3.3V)
+    bool use_right = (right_active_count > left_active_count);
+
+    int16_t out_min = INT16_MAX, out_max = -INT16_MAX;
+    for (int i = 0; i < pairs_read; i++) {
+        int32_t raw_val = use_right ? bit32_buffer[2 * i + 1] : bit32_buffer[2 * i];
+        int32_t value = raw_val >> 16;
+        dest[i] = (value > INT16_MAX) ? INT16_MAX : (value < -INT16_MAX) ? -INT16_MAX : (int16_t)value;
+        if (dest[i] < out_min) out_min = dest[i];
+        if (dest[i] > out_max) out_max = dest[i];
+    }
+
+    static int log_counter = 0;
+    if (++log_counter % 100 == 0) {
+        bool has_signal = (left_active_count > 0 || right_active_count > 0);
+        ESP_LOGI("MIC_TEST", "Signal: %s | Ch: %s | L[min=%ld, max=%ld] | R[min=%ld, max=%ld] | out16[min=%d, max=%d]", 
+                 has_signal ? "LIVE" : "DISCONNECTED",
+                 use_right ? "RIGHT(L/R=3.3V)" : "LEFT(L/R=GND)",
+                 (long)left_min, (long)left_max,
+                 (long)right_min, (long)right_max,
+                 out_min, out_max);
+    }
+
+    return pairs_read;
 }
 
 void NoAudioCodec::EnableInput(bool enable) {

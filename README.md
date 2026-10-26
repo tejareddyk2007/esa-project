@@ -1,173 +1,196 @@
-# An MCP-based Chatbot
+# Smart AI Voice Assistant & Emergency SOS System for Elderly Care (ESA Project)
 
-(English | [中文](README_zh.md) | [日本語](README_ja.md))
+[![Platform: ESP32-S3](https://img.shields.io/badge/Platform-ESP32--S3-blue.svg)](https://www.espressif.com/)
+[![ESP-IDF: v6.0+](https://img.shields.io/badge/ESP--IDF-v6.0.2-green.svg)](https://github.com/espressif/esp-idf)
+[![Audio: I2S INMP441 & MAX98357A](https://img.shields.io/badge/Audio-I2S_Simplex-orange.svg)]()
+[![Alert: Telegram Bot HTTPS](https://img.shields.io/badge/Alert-Telegram_Bot-2CA5E0.svg)](https://core.telegram.org/bots/api)
 
-## Introduction
+An autonomous AI-powered desktop voice companion and life-safety system designed specifically for elderly individuals living independently. It pairs conversational LLM voice capabilities with instant emergency physical SOS button triggers and voice emergency word recognition that dispatches real-time alerts to caretakers via Telegram.
 
-👉 [Human: Give AI a camera vs AI: Instantly finds out the owner hasn't washed hair for three days【bilibili】](https://www.bilibili.com/video/BV1bpjgzKEhd/)
+---
 
-👉 [Handcraft your AI girlfriend, beginner's guide【bilibili】](https://www.bilibili.com/video/BV1XnmFYLEJN/)
+## 🌟 Key Features
 
-As a voice interaction entry, the XiaoZhi AI chatbot leverages the AI capabilities of large models like Qwen / DeepSeek, and achieves multi-terminal control via the MCP protocol.
+1. **Natural Voice Interaction**:
+   - Real-time conversational AI powered by large language models (LLM) via the XiaoZhi backend.
+   - High-fidelity voice synthesis and live Speech-to-Text transcription.
+2. **Physical SOS Emergency Trigger**:
+   - Dedicated hardware button on **GPIO 7** (tied to GND).
+   - When pressed, initiates an authenticated HTTPS request to Telegram Bot API with root CA validation (`esp_crt_bundle_attach`), instantly notifying family or caretakers.
+3. **Emergency Voice Keyword Detection**:
+   - Continuously scans live speech transcripts for critical distress keywords (e.g., *"help"*, *"emergency"*, *"fall"*, *"fell down"*, *"call ambulance"*).
+   - Automatically dispatches Telegram alerts when distress phrases are spoken.
+4. **Resilient I2S Audio Pipeline**:
+   - **INMP441 Digital MEMS Microphone**: Configured with 64-bit compliant stereo I2S clocking ($1.024\text{ MHz}$) and dynamic channel auto-detection (works whether `L/R` is tied to GND or 3.3V).
+   - **MAX98357A I2S Class-D Amplifier**: Dedicated independent TX channel driving a 3W 4–8Ω speaker with volume normalization and clipping prevention.
+   - Headless architecture (no OLED required), eliminating I2C bus hangs and reducing power consumption.
 
-<img src="docs/mcp-based-graph.jpg" alt="Control everything via MCP" width="320">
+---
 
-## Recent Updates
+## 🔌 Hardware Wiring & Pinout Guide
 
-- The mainline now targets ESP-IDF v6.0 or later, with v6.0.2 as the preferred stable SDK. The previous 157-variant baseline was validated on ESP-IDF v6.0.1; the current matrix contains 171 variants, of which 170 support IDF 6.0.x and the ESP32-S31 variant requires IDF 6.1 or later.
-- MQTT and BluFi cryptographic code has migrated to PSA Crypto. IDF 6 component splits and third-party dependency compatibility have also been addressed.
-- Audio pipeline concurrency, MQTT/UDP packet validation, and release-matrix selection have been hardened.
-- ESP-IDF v5.5 is retained only for documented legacy boards. ESP32-P4 Rev1 and Rev3 are both supported on IDF 6 with ESP-SR 2.4.7; see the [ESP-IDF 6.0 Migration Guide](docs/esp-idf-6-migration.md) for full compatibility and board-validation details.
+### 1. INMP441 I²S Digital Microphone (Input)
+| INMP441 Pin | ESP32-S3 Pin | Notes |
+| :--- | :--- | :--- |
+| **VDD** | **3.3V (3V3)** | ⚠️ Do **not** connect to 5V |
+| **GND** | **GND** | Common Ground |
+| **L/R** | **GND** | Selects Left channel (or 3.3V for Right channel; firmware auto-detects) |
+| **WS** | **GPIO 4** | Word Select / LRCLK ($16\text{ kHz}$) |
+| **SCK** | **GPIO 5** | Continuous Bit Clock ($1.024\text{ MHz}$) |
+| **SD** | **GPIO 6** | Serial Audio Data In |
 
-### Features Implemented
+### 2. MAX98357A I²S Amplifier & Speaker (Output)
+| MAX98357A Pin | ESP32-S3 Pin | Notes |
+| :--- | :--- | :--- |
+| **VIN** | **5V** (or 3.3V) | 5V provides louder, cleaner volume |
+| **GND** | **GND** | Common Ground |
+| **DIN** | **GPIO 8** | Serial Audio Data Out |
+| **BCLK** | **GPIO 9** | Bit Clock ($1.536\text{ MHz}$) |
+| **LRC** | **GPIO 10** | Left/Right Word Clock ($24\text{ kHz}$) |
+| **GAIN** | *Leave Floating* | Default 9dB gain (or connect to GND for 12dB) |
+| **SD / SD_MODE** | *Leave Floating* | Default `(L+R)/2` mono average via onboard pull-up |
+| **$+$ and $-$** | Speaker Terminals | Connect to 4Ω or 8Ω 3W speaker |
 
-- Wi-Fi, wired Ethernet, USB RNDIS, and ML307/EC801E or NT26 Cat.1 4G networking; supported boards can switch between Wi-Fi and 4G
-- Offline voice wake-up with [ESP-SR](https://github.com/espressif/esp-sr), including customizable wake words
-- Two communication transports: [WebSocket](docs/websocket.md) and [MQTT + UDP](docs/mqtt-udp.md)
-- Opus audio streaming with conventional streaming ASR + LLM + TTS pipelines and Realtime end-to-end voice models; AEC-capable hardware supports realtime full-duplex interaction
-- Speaker recognition, identifies the current speaker [3D Speaker](https://github.com/modelscope/3D-Speaker)
-- OLED / LCD displays with emoji and rich expression support, plus camera vision input on supported boards
-- Battery display and power management
-- 39 interface languages, with localized voice prompts where available and English fallback
-- ESP32, ESP32-C3, ESP32-C5, ESP32-C6, ESP32-S3, and ESP32-P4 chip platforms
-- Wi-Fi provisioning through hotspot or BluFi
-- Device-side MCP for device control (Speaker, LED, Servo, GPIO, etc.)
-- Cloud-side MCP to extend large model capabilities (smart home control, PC desktop operation, knowledge search, email, etc.)
-- Customizable wake words, fonts, emojis, and chat backgrounds with online web-based editing ([Custom Assets Generator](https://github.com/78/xiaozhi-assets-generator))
+### 3. Emergency SOS Button
+| Component | ESP32-S3 Pin | Notes |
+| :--- | :--- | :--- |
+| **Push Button (Terminal 1)** | **GPIO 7** | Internal pull-up enabled in software |
+| **Push Button (Terminal 2)** | **GND** | Pressing grounds GPIO 7, firing emergency alert |
 
-## Hardware
+---
 
-### Breadboard DIY Practice
+## 💻 How to Clone and Setup on a New Laptop
 
-See the Feishu document tutorial:
+Follow these exact steps to set up, build, and flash this project on any Windows, macOS, or Linux computer.
 
-👉 ["XiaoZhi AI Chatbot Encyclopedia"](https://ccnphfhqs21z.feishu.cn/wiki/F5krwD16viZoF0kKkvDcrZNYnhb?from=from_copylink)
+### Step 1: Install Prerequisites
+1. **Python 3.10 to 3.13**: Make sure Python is added to your system `PATH`.
+2. **Git**: [Download Git](https://git-scm.com/downloads).
+3. **ESP-IDF (v6.0.2 recommended, or v5.x)**:
+   - **Windows**: Use the [ESP-IDF Windows Installer](https://dl.espressif.com/dl/esp-idf/) (select version `v6.0.2` or `v5.4`).
+   - **Linux / macOS**: Follow the [standard Espressif manual setup](https://docs.espressif.com/projects/esp-idf/en/stable/esp32s3/get-started/).
 
-Breadboard demo:
+---
 
-![Breadboard Demo](docs/v1/wiring2.jpg)
+### Step 2: Clone This Repository
+Open your terminal (PowerShell, Command Prompt, or Bash) and clone the repository:
+```bash
+git clone https://github.com/tejareddyk2007/esa-project.git
+cd esa-project
+```
 
-### Supports 138 Board Directories and 171 Release Variants (Partial List)
+---
 
-- <a href="https://oshwhub.com/li-chuang-kai-fa-ban/li-chuang-shi-zhan-pai-esp32-s3-kai-fa-ban" target="_blank" title="LiChuang ESP32-S3 Development Board">LiChuang ESP32-S3 Development Board</a>
-- <a href="https://github.com/espressif/esp-box" target="_blank" title="Espressif ESP32-S3-BOX-3">Espressif ESP32-S3-BOX-3</a>
-- <a href="https://docs.m5stack.com/zh_CN/core/CoreS3" target="_blank" title="M5Stack CoreS3">M5Stack CoreS3</a>
-- <a href="https://docs.m5stack.com/en/atom/Atomic%20Echo%20Base" target="_blank" title="AtomS3R + Echo Base">M5Stack AtomS3R + Echo Base</a>
-- <a href="https://gf.bilibili.com/item/detail/1108782064" target="_blank" title="Magic Button 2.4">Magic Button 2.4</a>
-- <a href="https://www.waveshare.net/shop/ESP32-S3-Touch-AMOLED-1.8.htm" target="_blank" title="Waveshare ESP32-S3-Touch-AMOLED-1.8">Waveshare ESP32-S3-Touch-AMOLED-1.8</a>
-- <a href="https://github.com/Xinyuan-LilyGO/T-Circle-S3" target="_blank" title="LILYGO T-Circle-S3">LILYGO T-Circle-S3</a>
-- <a href="https://oshwhub.com/tenclass01/xmini_c3" target="_blank" title="XiaGe Mini C3">XiaGe Mini C3</a>
-- <a href="https://oshwhub.com/movecall/cuican-ai-pendant-lights-up-y" target="_blank" title="Movecall CuiCan ESP32S3">CuiCan AI Pendant</a>
-- <a href="https://github.com/WMnologo/xingzhi-ai" target="_blank" title="WMnologo-Xingzhi-1.54">WMnologo-Xingzhi-1.54TFT</a>
-- <a href="https://www.seeedstudio.com/SenseCAP-Watcher-W1-A-p-5979.html" target="_blank" title="SenseCAP Watcher">SenseCAP Watcher</a>
-- <a href="https://www.bilibili.com/video/BV1BHJtz6E2S/" target="_blank" title="ESP-HI Low Cost Robot Dog">ESP-HI Low Cost Robot Dog</a>
+### Step 3: Activate the ESP-IDF Environment
+In your terminal, activate the ESP-IDF tools:
 
-<div style="display: flex; justify-content: space-between;">
-  <a href="docs/v1/lichuang-s3.jpg" target="_blank" title="LiChuang ESP32-S3 Development Board">
-    <img src="docs/v1/lichuang-s3.jpg" width="240" />
-  </a>
-  <a href="docs/v1/espbox3.jpg" target="_blank" title="Espressif ESP32-S3-BOX3">
-    <img src="docs/v1/espbox3.jpg" width="240" />
-  </a>
-  <a href="docs/v1/m5cores3.jpg" target="_blank" title="M5Stack CoreS3">
-    <img src="docs/v1/m5cores3.jpg" width="240" />
-  </a>
-  <a href="docs/v1/atoms3r.jpg" target="_blank" title="AtomS3R + Echo Base">
-    <img src="docs/v1/atoms3r.jpg" width="240" />
-  </a>
-  <a href="docs/v1/magiclick.jpg" target="_blank" title="Magic Button 2.4">
-    <img src="docs/v1/magiclick.jpg" width="240" />
-  </a>
-  <a href="docs/v1/waveshare.jpg" target="_blank" title="Waveshare ESP32-S3-Touch-AMOLED-1.8">
-    <img src="docs/v1/waveshare.jpg" width="240" />
-  </a>
-  <a href="docs/v1/lilygo-t-circle-s3.jpg" target="_blank" title="LILYGO T-Circle-S3">
-    <img src="docs/v1/lilygo-t-circle-s3.jpg" width="240" />
-  </a>
-  <a href="docs/v1/xmini-c3.jpg" target="_blank" title="XiaGe Mini C3">
-    <img src="docs/v1/xmini-c3.jpg" width="240" />
-  </a>
-  <a href="docs/v1/movecall-cuican-esp32s3.jpg" target="_blank" title="CuiCan">
-    <img src="docs/v1/movecall-cuican-esp32s3.jpg" width="240" />
-  </a>
-  <a href="docs/v1/wmnologo_xingzhi_1.54.jpg" target="_blank" title="WMnologo-Xingzhi-1.54">
-    <img src="docs/v1/wmnologo_xingzhi_1.54.jpg" width="240" />
-  </a>
-  <a href="docs/v1/sensecap_watcher.jpg" target="_blank" title="SenseCAP Watcher">
-    <img src="docs/v1/sensecap_watcher.jpg" width="240" />
-  </a>
-  <a href="docs/v1/esp-hi.jpg" target="_blank" title="ESP-HI Low Cost Robot Dog">
-    <img src="docs/v1/esp-hi.jpg" width="240" />
-  </a>
-</div>
+- **Windows PowerShell:**
+  ```powershell
+  . "C:\esp\v6.0.2\esp-idf\export.ps1"
+  ```
+- **Windows Command Prompt (CMD):**
+  ```cmd
+  C:\esp\v6.0.2\esp-idf\export.bat
+  ```
+- **Linux / macOS:**
+  ```bash
+  . $HOME/esp/esp-idf/export.sh
+  ```
 
-## Software
+*(Verify the installation by running `idf.py --version`. You should see `ESP-IDF v6.0.2` or similar).*
 
-### Firmware Flashing
+---
 
-For beginners, it is recommended to use the firmware that can be flashed without setting up a development environment.
+### Step 4: Configure Wi-Fi & Telegram Credentials
 
-The firmware connects to the official [xiaozhi.me](https://xiaozhi.me) server by default. Personal users can register an account to use the Qwen real-time model for free.
+#### Wi-Fi Credentials:
+Edit [`main/boards/bread-compact-wifi/compact_wifi_board.cc`](file:///main/boards/bread-compact-wifi/compact_wifi_board.cc):
+```cpp
+auto& ssid_manager = SsidManager::GetInstance();
+if (ssid_manager.GetSsidList().empty()) {
+    ssid_manager.AddSsid("YOUR_WIFI_SSID", "YOUR_WIFI_PASSWORD");
+}
+```
 
-👉 [Beginner's Firmware Flashing Guide](https://ccnphfhqs21z.feishu.cn/wiki/Zpz4wXBtdimBrLk25WdcXzxcnNS)
+#### Telegram Alert Bot Token & Chat ID:
+Edit [`main/sos_controller.h`](file:///main/sos_controller.h):
+```cpp
+const char* const kTelegramBotToken = "YOUR_TELEGRAM_BOT_TOKEN";
+const char* const kTelegramChatId   = "YOUR_TELEGRAM_CHAT_ID";
+```
 
-### Development Environment
+---
 
-- Cursor or VSCode
-- Install the ESP-IDF plugin. [ESP-IDF v6.0.2](https://github.com/espressif/esp-idf/releases/tag/v6.0.2) is preferred; use a stable v6.0 or later release. ESP-IDF v5.5.2 is retained only for legacy board compatibility
-- Linux is better than Windows for faster compilation and fewer driver issues
-- This project uses Google C++ code style, please ensure compliance when submitting code
+### Step 5: Build, Flash, and Monitor
+Plug your ESP32-S3 into your laptop via USB. Check Device Manager (or `ls /dev/tty*`) to find your COM port (e.g. `COM6` or `/dev/ttyUSB0`).
 
-### Developer Documentation
+1. **Set target chip to ESP32-S3:**
+   ```bash
+   idf.py set-target esp32s3
+   ```
+2. **Build the firmware:**
+   ```bash
+   idf.py build
+   ```
+3. **Flash and open serial monitor (replace `COM6` with your port):**
+   ```bash
+   idf.py -p COM6 flash monitor
+   ```
 
-- [ESP-IDF 6.0 Migration Guide](docs/esp-idf-6-migration.md) - SDK compatibility, component changes, legacy hardware support, and board validation status
-- [Custom Board Guide](docs/custom-board.md) - Learn how to create custom boards for XiaoZhi AI
-- [MCP Protocol IoT Control Usage](docs/mcp-usage.md) - Learn how to control IoT devices via MCP protocol
-- [MCP Protocol Interaction Flow](docs/mcp-protocol.md) - Device-side MCP protocol implementation
-- [MQTT + UDP Hybrid Communication Protocol Document](docs/mqtt-udp.md)
-- [A detailed WebSocket communication protocol document](docs/websocket.md)
+*(To exit the serial monitor at any time, press `Ctrl + ]`)*.
 
-## Large Model Configuration
+---
 
-If you already have a XiaoZhi AI chatbot device and have connected to the official server, you can log in to the [xiaozhi.me](https://xiaozhi.me) console for configuration.
+### Step 6: XiaoZhi Console Setup (First Time Activation)
+1. On boot, the terminal will print a **6-character verification code** or QR link.
+2. Go to **[https://xiaozhi.me/console/agents](https://xiaozhi.me/console/agents)** in your web browser.
+3. Click **Add Device** $\to$ Enter your verification code.
+4. Once paired, your assistant will appear as **Online**.
+5. Click **Configure** on your agent card to select voice tone, language prompt (e.g., English speaking assistant), and personality.
 
-👉 [Backend Operation Video Tutorial (Old Interface)](https://www.bilibili.com/video/BV1jUCUY2EKM/)
+---
 
-## Related Open Source Projects
+## 🧪 Testing the Device
 
-For server deployment on personal computers, refer to the following open-source projects:
+1. **Voice Conversation**:
+   - Press the **BOOT button (GPIO 0)** on your board.
+   - The device enters `listening` (`聆听中...`).
+   - Speak into the INMP441 microphone: *"What is the time right now?"*
+   - The transcript appears live in the terminal (`>> What is the time right now?`), followed by the assistant's voice through the speaker (`<< It is ...`).
+2. **Physical SOS Button**:
+   - Press the push button connected to **GPIO 7**.
+   - The terminal logs:
+     ```text
+     W (...) SosController: SOS ALERT SENT!
+     I (...) SosController: Telegram alert sent! Status code: 200
+     ```
+   - An immediate emergency message arrives on the caretaker's Telegram phone app.
 
-- [xinnan-tech/xiaozhi-esp32-server](https://github.com/xinnan-tech/xiaozhi-esp32-server) Python server
-- [joey-zhou/xiaozhi-esp32-server-java](https://github.com/joey-zhou/xiaozhi-esp32-server-java) Java server
-- [AnimeAIChat/xiaozhi-server-go](https://github.com/AnimeAIChat/xiaozhi-server-go) Golang server
-- [hackers365/xiaozhi-esp32-server-golang](https://github.com/hackers365/xiaozhi-esp32-server-golang) Golang server
+---
 
-Other client projects using the XiaoZhi communication protocol:
+## 📂 Project Structure
 
-- [huangjunsen0406/py-xiaozhi](https://github.com/huangjunsen0406/py-xiaozhi) Python client
-- [TOM88812/xiaozhi-android-client](https://github.com/TOM88812/xiaozhi-android-client) Android client
-- [100askTeam/xiaozhi-linux](http://github.com/100askTeam/xiaozhi-linux) Linux client by 100ask
-- [78/xiaozhi-sf32](https://github.com/78/xiaozhi-sf32) Bluetooth chip firmware by Sichuan
-- [QuecPython/solution-xiaozhiAI](https://github.com/QuecPython/solution-xiaozhiAI) QuecPython firmware by Quectel
+```text
+├── main/
+│   ├── application.cc              # XiaoZhi core state machine & transcript handling
+│   ├── sos_controller.h            # Telegram Bot HTTPS emergency dispatcher
+│   ├── sos_controller.cc           # HTTPS client with root CA certificate bundle
+│   ├── audio/
+│   │   ├── codecs/
+│   │   │   ├── no_audio_codec.cc   # I2S Simplex driver (INMP441 + MAX98357A)
+│   │   │   └── no_audio_codec.h
+│   │   └── audio_service.cc        # Audio processing, resampler, Opus encoder
+│   └── boards/
+│       └── bread-compact-wifi/
+│           ├── compact_wifi_board.cc # Hardware board init & button handlers
+│           └── config.h              # Pin assignments (GPIO 4, 5, 6, 7, 8, 9, 10)
+├── scripts/
+│   └── build.py                    # Multi-platform build automation script
+├── sdkconfig                       # Active ESP-IDF configuration for ESP32-S3
+└── README.md                       # Documentation & setup guide
+```
 
-Custom Assets Tools:
+---
 
-- [78/xiaozhi-assets-generator](https://github.com/78/xiaozhi-assets-generator) Custom Assets Generator (Wake words, fonts, emojis, backgrounds)
-
-## About the Project
-
-This is an open-source ESP32 project, released under the MIT license, allowing anyone to use it for free, including for commercial purposes.
-
-We hope this project helps everyone understand AI hardware development and apply rapidly evolving large language models to real hardware devices.
-
-If you have any ideas or suggestions, please feel free to raise Issues or join our [Discord](https://discord.gg/C759fGMBcZ) or QQ group: 1095994019
-
-## Star History
-
-<a href="https://star-history.com/#78/xiaozhi-esp32&Date">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=78/xiaozhi-esp32&type=Date&theme=dark" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=78/xiaozhi-esp32&type=Date" />
-   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=78/xiaozhi-esp32&type=Date" />
- </picture>
-</a>
+## 🛡️ License
+Licensed under the Apache License 2.0. Based on the XiaoZhi ESP32 open-source ecosystem.
